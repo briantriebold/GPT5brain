@@ -21,6 +21,7 @@ from gpt5.tools import reporting as reporting_tool
 from gpt5.math import engine as math_engine
 from gpt5.plugins.loader import discover_plugins, load_plugin, before_command_all, after_command_all
 from gpt5.tools import git_ops
+from gpt5.tools import github_api
 from gpt5.modules.deficiency import DeficiencyDetector
 from gpt5.tools import validators as validators
 from gpt5.tools import report_html as report_html
@@ -299,12 +300,19 @@ def build_parser() -> argparse.ArgumentParser:
                     agent_counts[sel.name] += 1
                 completed.append(orch.run_task(t))
         elif args.strategy == "broadcast":
+            # Parallel fan-out to capable agents
+            import concurrent.futures as _f
+            tasks_to_run = []
             for t in flat:
                 for a in orch.agents.values():
                     if not t.capabilities or any(c in a.profile.capabilities for c in t.capabilities):
                         tt = replace(t, assigned_agent=a.name)
+                        tasks_to_run.append(tt)
                         agent_counts[a.name] += 1
-                        completed.append(orch.run_task(tt))
+            with _f.ThreadPoolExecutor(max_workers=max(4, len(orch.agents))) as ex:
+                futs = [ex.submit(orch.run_task, tt) for tt in tasks_to_run]
+                for fut in futs:
+                    completed.append(fut.result())
         else:  # roundrobin
             names = list(orch.agents.keys())
             idx = 0
@@ -341,6 +349,16 @@ def build_parser() -> argparse.ArgumentParser:
         report_lines.append("")
         report_lines.append("## Diagram")
         report_lines.extend(mer)
+        # Sequence diagram (orchestrator -> agent)
+        seq = ["```mermaid", "sequenceDiagram", "    participant O as orchestrator"]
+        for t in completed:
+            agent = t.assigned_agent or "agent"
+            seq.append(f"    O->>+{agent}: {t.title}")
+            seq.append(f"    {agent}-->>-O: done ({(t.duration_ms or 0)} ms)")
+        seq.append("```")
+        report_lines.append("")
+        report_lines.append("## Agent Sequence")
+        report_lines.extend(seq)
         # Gantt timeline (sequential synthetic timing)
         gantt = ["```mermaid", "gantt", "    dateFormat  X", "    title Execution Timeline", "    section Tasks"]
         for i, _t in enumerate(completed):
@@ -762,6 +780,33 @@ def build_parser() -> argparse.ArgumentParser:
         _print({"status": "saved", "path": str(outp)}, args.json)
     rhtml.set_defaults(func=cmd_report_html)
 
+    # Pull request automation
+    pr = sub.add_parser("pr", help="Pull request automation")
+    pr.add_argument("action", choices=["create"]) 
+    pr.add_argument("--base", default="main")
+    pr.add_argument("--head", help="Head branch", default=None)
+    pr.add_argument("--title", required=True)
+    pr.add_argument("--body", default="")
+    pr.add_argument("--json", action="store_true")
+    def cmd_pr(args: argparse.Namespace) -> None:  # noqa: ANN001
+        # Determine origin URL
+        origin = git_ops.git_remote_list(str(Path.cwd()))
+        origin_url = None
+        for line in origin.splitlines():
+            if "(push)" in line and "origin\t" in line:
+                origin_url = line.split("\t", 1)[1].split(" ")[0]
+                break
+        if not origin_url:
+            _print({"error": "no-origin-remote"}, args.json)
+            return
+        head = args.head or git_ops.git_current_branch(str(Path.cwd()))
+        try:
+            pr = github_api.create_pull_request(origin_url, head=head, base=args.base, title=args.title, body=args.body)
+            _print({"status": "created", "url": pr.get("html_url"), "number": pr.get("number")}, args.json)
+        except Exception as exc:  # noqa: BLE001
+            _print({"error": str(exc)}, args.json)
+    pr.set_defaults(func=cmd_pr)
+
     # Optimize-now (chain mission -> regressions -> dashboard -> export latest)
     opt = sub.add_parser("optimize", help="Self-optimization utilities")
     opt_sub = opt.add_subparsers(dest="opt_cmd")
@@ -825,6 +870,16 @@ def build_parser() -> argparse.ArgumentParser:
         report_lines.append("")
         report_lines.append("## Diagram")
         report_lines.extend(mer)
+        # Sequence diagram
+        seq = ["```mermaid", "sequenceDiagram", "    participant O as orchestrator"]
+        for t in completed:
+            agent = t.assigned_agent or "agent"
+            seq.append(f"    O->>+{agent}: {t.title}")
+            seq.append(f"    {agent}-->>-O: done ({(t.duration_ms or 0)} ms)")
+        seq.append("```")
+        report_lines.append("")
+        report_lines.append("## Agent Sequence")
+        report_lines.extend(seq)
         report = "\n".join(report_lines)
         mem.save_spec(f"mission:{mid}:execution", report, metadata={"objective": args.objective, "strategy": args.strategy})
         mem.mission_update(mid, status="complete", progress=1.0, report=report)
@@ -916,12 +971,18 @@ def build_parser() -> argparse.ArgumentParser:
                     agent_counts[sel.name] += 1
                 completed.append(orch.run_task(t))
         elif args.strategy == "broadcast":
+            import concurrent.futures as _f
+            tasks_to_run = []
             for t in flat:
                 for a in orch.agents.values():
                     if not t.capabilities or any(c in a.profile.capabilities for c in t.capabilities):
                         tt = replace(t, assigned_agent=a.name)
+                        tasks_to_run.append(tt)
                         agent_counts[a.name] += 1
-                        completed.append(orch.run_task(tt))
+            with _f.ThreadPoolExecutor(max_workers=max(4, len(orch.agents))) as ex:
+                futs = [ex.submit(orch.run_task, tt) for tt in tasks_to_run]
+                for fut in futs:
+                    completed.append(fut.result())
         else:
             names = list(orch.agents.keys())
             idx = 0

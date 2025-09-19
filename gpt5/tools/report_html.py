@@ -44,13 +44,12 @@ def render_html(markdown: str, title: str = "Report") -> str:
   </head>
   <body>
     <h1>{html.escape(title)}</h1>
-    <h2>Markdown</h2>
+    <h2>Markdown (raw)</h2>
     <pre>{escaped}</pre>
-    <h2>Diagrams</h2>
+    <h2>Mermaid Diagrams</h2>
     {mermaid_divs}
     <script src="{MERMAID_CDN}"></script>
     <script>mermaid.initialize({{ startOnLoad: true }});</script>
   </body>
 </html>
 """
-
