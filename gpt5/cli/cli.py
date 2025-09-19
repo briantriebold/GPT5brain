@@ -780,6 +780,17 @@ def build_parser() -> argparse.ArgumentParser:
         _print({"status": "saved", "path": str(outp)}, args.json)
     rhtml.set_defaults(func=cmd_report_html)
 
+    rindex = rep_sub.add_parser("index", help="Build reports/index.html")
+    rindex.add_argument("--dir", default="reports")
+    rindex.add_argument("--json", action="store_true")
+    def cmd_report_index(args: argparse.Namespace) -> None:  # noqa: ANN001
+        outdir = Path(args.dir).resolve()
+        ensure_dir(outdir)
+        html = snapshot_tool.build_index(outdir)
+        (outdir / "index.html").write_text(html, encoding="utf-8")
+        _print({"status": "saved", "path": str(outdir / "index.html")}, args.json)
+    rindex.set_defaults(func=cmd_report_index)
+
     # Pull request automation
     pr = sub.add_parser("pr", help="Pull request automation")
     pr.add_argument("action", choices=["create"]) 
@@ -787,6 +798,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--head", help="Head branch", default=None)
     pr.add_argument("--title", required=True)
     pr.add_argument("--body", default="")
+    pr.add_argument("--use-gh", action="store_true", help="Prefer GitHub CLI (gh) if available")
     pr.add_argument("--json", action="store_true")
     def cmd_pr(args: argparse.Namespace) -> None:  # noqa: ANN001
         # Determine origin URL
@@ -801,8 +813,12 @@ def build_parser() -> argparse.ArgumentParser:
             return
         head = args.head or git_ops.git_current_branch(str(Path.cwd()))
         try:
-            pr = github_api.create_pull_request(origin_url, head=head, base=args.base, title=args.title, body=args.body)
-            _print({"status": "created", "url": pr.get("html_url"), "number": pr.get("number")}, args.json)
+            if args.use_gh and gh_cli.available():
+                r = gh_cli.pr_create(args.base, head, args.title, args.body)
+                _print({"status": "created", "url": r.get("url")}, args.json)
+            else:
+                r = github_api.create_pull_request(origin_url, head=head, base=args.base, title=args.title, body=args.body)
+                _print({"status": "created", "url": r.get("html_url"), "number": r.get("number")}, args.json)
         except Exception as exc:  # noqa: BLE001
             _print({"error": str(exc)}, args.json)
     pr.set_defaults(func=cmd_pr)
@@ -925,6 +941,22 @@ def build_parser() -> argparse.ArgumentParser:
         (outdir / sanitize_filename("deficiency:dashboard.html")).write_text(_rhtml.render_html(dash, title="deficiency:dashboard"), encoding="utf-8")
         _print({"mission": mid, "regressions": reg_results, "dashboard": {"open": by_status.get('open',0), "proposed": by_status.get('proposed',0), "mitigated": by_status.get('mitigated',0)}}, args.json)
     onow.set_defaults(func=cmd_optimize_now)
+
+    osched = opt_sub.add_parser("schedule")
+    osched.add_argument("--run", action="store_true", help="Attempt to register Windows scheduled task now")
+    osched.add_argument("--json", action="store_true")
+    def cmd_optimize_schedule(args: argparse.Namespace) -> None:  # noqa: ANN001
+        script = Path(__file__).resolve().parents[2] / "scripts" / "schedule_optimize.ps1"
+        if not script.exists():
+            _print({"error": "script-not-found", "path": str(script)}, args.json)
+            return
+        if args.run:
+            import subprocess
+            cp = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)], capture_output=True, text=True)
+            _print({"status": "ran", "stdout": cp.stdout, "stderr": cp.stderr}, args.json)
+        else:
+            _print({"status": "ready", "path": str(script)}, args.json)
+    osched.set_defaults(func=cmd_optimize_schedule)
 
     # Mission autopilot
     mission = sub.add_parser("mission", help="Autopilot planâ†’executeâ†’learn")
