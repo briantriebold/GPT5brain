@@ -24,6 +24,8 @@ from gpt5.tools import git_ops
 from gpt5.modules.deficiency import DeficiencyDetector
 from gpt5.tools import validators as validators
 from gpt5.tools import report_html as report_html
+from gpt5.tools.pathutil import sanitize_filename, ensure_dir
+from gpt5 import config as gpt5_config
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.db"
 
@@ -86,6 +88,18 @@ def cmd_prd(args: argparse.Namespace) -> None:
     output_path.write_text(markdown, encoding="utf-8")
     memory.save_spec(args.name, markdown, metadata={"author": prd.author})
     _print({"path": str(output_path), "name": args.name, "author": prd.author}, args.json)
+    # Auto-export HTML if configured
+    try:
+        settings = gpt5_config.load_settings(Path.cwd())
+        ae = settings.get("autoExport", {})
+        if ae.get("enabled", False) and any(args.name.startswith(p) for p in ae.get("prefixes", [])):
+            outdir = Path(ae.get("dir", "reports"))
+            ensure_dir(outdir)
+            html_text = report_html.render_html(markdown, title=args.name)
+            fname = sanitize_filename(f"{args.name}.html")
+            (outdir / fname).write_text(html_text, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def cmd_checklist(args: argparse.Namespace) -> None:
@@ -205,6 +219,17 @@ def build_parser() -> argparse.ArgumentParser:
         out.write_text(md, encoding="utf-8")
         memory.save_spec(args.name, md, metadata={"type": "feature-map", "sources": sources})
         _print({"status": "saved", "path": str(out), "sources": sources}, args.json)
+        try:
+            settings = gpt5_config.load_settings(Path.cwd())
+            ae = settings.get("autoExport", {})
+            if ae.get("enabled", False) and any(args.name.startswith(p) for p in ae.get("prefixes", [])):
+                outdir = Path(ae.get("dir", "reports"))
+                ensure_dir(outdir)
+                html_text = report_html.render_html(md, title=args.name)
+                fname = sanitize_filename(f"{args.name}.html")
+                (outdir / fname).write_text(html_text, encoding="utf-8")
+        except Exception:
+            pass
     featuremap.set_defaults(func=cmd_featuremap)
 
     implplan = sub.add_parser("impl-plan", help="Generate an Implementation Plan PRD from a feature map")
@@ -220,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
         out.write_text(md, encoding="utf-8")
         memory.save_spec(args.name, md, metadata={"type": "impl-plan", "from": args.from_featuremap})
         _print({"status": "saved", "path": str(out)}, args.json)
+        try:
+            settings = gpt5_config.load_settings(Path.cwd())
+            ae = settings.get("autoExport", {})
+            if ae.get("enabled", False) and any(args.name.startswith(p) for p in ae.get("prefixes", [])):
+                outdir = Path(ae.get("dir", "reports"))
+                ensure_dir(outdir)
+                html_text = report_html.render_html(md, title=args.name)
+                fname = sanitize_filename(f"{args.name}.html")
+                (outdir / fname).write_text(html_text, encoding="utf-8")
+        except Exception:
+            pass
     implplan.set_defaults(func=cmd_implplan)
 
     execute = sub.add_parser("execute", help="Execute a plan for an objective (simulated swarm)")
@@ -290,11 +326,37 @@ def build_parser() -> argparse.ArgumentParser:
         report_lines.append("")
         report_lines.append("## Tasks")
         report_lines.append(format_task_report(completed))
+        # Add mermaid diagram
+        mer = ["```mermaid", "flowchart TD"]
+        last = None
+        for i, t in enumerate(completed):
+            nid = f"T{i}"
+            mer.append(f"    {nid}([" + t.title.replace('"','\"') + "]):::task")
+            if last is not None:
+                mer.append(f"    {last} --> {nid}")
+            last = nid
+        mer.append("    classDef task fill:#fff8e1,stroke:#ff6f00,stroke-width:1px;")
+        mer.append("```")
+        report_lines.append("")
+        report_lines.append("## Diagram")
+        report_lines.extend(mer)
         report = "\n".join(report_lines)
         if args.report:
             Path(args.report).resolve().write_text(report, encoding="utf-8")
         memory.save_spec(f"execution:{args.objective}", report, metadata={"objective": args.objective, "strategy": args.strategy})
         _print({"status": "executed", "tasks": len(completed), "strategy": args.strategy}, args.json)
+        try:
+            settings = gpt5_config.load_settings(Path.cwd())
+            ae = settings.get("autoExport", {})
+            name = f"execution:{args.objective}"
+            if ae.get("enabled", False) and any(name.startswith(p) for p in ae.get("prefixes", [])):
+                outdir = Path(ae.get("dir", "reports"))
+                ensure_dir(outdir)
+                html_text = report_html.render_html(report, title=name)
+                fname = sanitize_filename(f"{name}.html")
+                (outdir / fname).write_text(html_text, encoding="utf-8")
+        except Exception:
+            pass
     execute.set_defaults(func=cmd_execute)
 
     math = sub.add_parser("math", help="Advanced mathematics processing")
@@ -398,6 +460,21 @@ def build_parser() -> argparse.ArgumentParser:
         x, fval = math_engine.minimize_expression(args.expr, vars_order, x0)
         _print({"x": x.tolist(), "f": fval}, args.json)
     mo.set_defaults(func=cmd_math_opt)
+
+    mf = math_sub.add_parser("fft", help="Compute real FFT magnitude spectrum")
+    mf.add_argument("--data", required=True, help="JSON array of samples, e.g., [0,1,0,-1,...]")
+    mf.add_argument("--rate", type=float, default=1.0, help="Sample rate (Hz)")
+    mf.add_argument("--top", type=int, default=5, help="Top-K peaks to report")
+    mf.add_argument("--json", action="store_true")
+    def cmd_math_fft(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        data = _json.loads(args.data)
+        xf, mag = math_engine.fft_real(data, sample_rate=args.rate)
+        # extract top-K (exclude DC unless it's significant)
+        idx = mag.argsort()[::-1][: max(1, args.top)]
+        peaks = [{"freq": float(xf[i]), "mag": float(mag[i])} for i in idx]
+        _print({"peaks": peaks, "n": len(data)}, args.json)
+    mf.set_defaults(func=cmd_math_fft)
 
 
     plan = sub.add_parser("plan", help="Generate execution plan")
@@ -525,6 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     rep_sub = report.add_subparsers(dest="rep_cmd")
     rhtml = rep_sub.add_parser("html", help="Export markdown/spec with Mermaid to a standalone HTML file")
     rhtml.add_argument("--spec", help="Spec name stored in memory (e.g., execution:..., mission:..., deficiency:dashboard)")
+    rhtml.add_argument("--spec-latest", action="store_true", help="Export latest saved spec (optionally filter by --prefix)")
+    rhtml.add_argument("--prefix", help="Prefix to match when using --spec-latest")
     rhtml.add_argument("--input", help="Path to a markdown file to export")
     rhtml.add_argument("--title", help="HTML title")
     rhtml.add_argument("--output", required=True, help="Output .html path")
@@ -538,6 +617,24 @@ def build_parser() -> argparse.ArgumentParser:
             if not rec:
                 _print({"error": "spec-not-found", "spec": args.spec}, args.json)
                 return
+            _, name, md, _ = rec
+            content = md
+            title = args.title or name
+        elif args.spec_latest:
+            rows = memory.list_specs()
+            md_name = None
+            if args.prefix:
+                # find first matching by prefix
+                for (_id, name, _created) in rows:  # noqa: N806
+                    if str(name).startswith(args.prefix):
+                        md_name = name
+                        break
+            else:
+                md_name = rows[0][1] if rows else None
+            if not md_name:
+                _print({"error": "no-specs", "hint": "no matching specs or memory empty"}, args.json)
+                return
+            rec = memory.load_spec(md_name)
             _, name, md, _ = rec
             content = md
             title = args.title or name
@@ -648,6 +745,18 @@ def build_parser() -> argparse.ArgumentParser:
         memory.save_spec(f"mission:{mid}:execution", report, metadata={"objective": args.objective, "strategy": args.strategy})
         memory.mission_update(mid, status="complete", progress=1.0, report=report)
         _print({"mission": mid, "status": "complete", "tasks": len(completed), "strategy": args.strategy}, args.json)
+        try:
+            settings = gpt5_config.load_settings(Path.cwd())
+            ae = settings.get("autoExport", {})
+            name = f"mission:{mid}:execution"
+            if ae.get("enabled", False) and any(name.startswith(p) for p in ae.get("prefixes", [])):
+                outdir = Path(ae.get("dir", "reports"))
+                ensure_dir(outdir)
+                html_text = report_html.render_html(report, title=name)
+                fname = sanitize_filename(f"{name}.html")
+                (outdir / fname).write_text(html_text, encoding="utf-8")
+        except Exception:
+            pass
     mstart.set_defaults(func=cmd_mission_start)
 
     mstatus = mission_sub.add_parser("status")
@@ -810,6 +919,18 @@ def build_parser() -> argparse.ArgumentParser:
         out.write_text(content, encoding="utf-8")
         memory.save_spec("deficiency:dashboard", content, metadata={"open": by_status.get('open',0), "proposed": by_status.get('proposed',0), "mitigated": by_status.get('mitigated',0), "regressions": total_reg, "passed": passed, "failed": failed})
         _print({"status": "saved", "path": str(out), "open": by_status.get('open',0), "proposed": by_status.get('proposed',0), "mitigated": by_status.get('mitigated',0), "regressions": total_reg}, args.json)
+        try:
+            settings = gpt5_config.load_settings(Path.cwd())
+            ae = settings.get("autoExport", {})
+            name = "deficiency:dashboard"
+            if ae.get("enabled", False) and any(name.startswith(p) for p in ae.get("prefixes", [])):
+                outdir = Path(ae.get("dir", "reports"))
+                ensure_dir(outdir)
+                html_text = report_html.render_html(content, title=name)
+                fname = sanitize_filename(f"{name}.html")
+                (outdir / fname).write_text(html_text, encoding="utf-8")
+        except Exception:
+            pass
     ddash.set_defaults(func=cmd_defi_dashboard)
 
     # Regression harness
@@ -876,9 +997,11 @@ def main(argv: list[str] | None = None) -> None:
     if not getattr(args, "command", None):
         parser.print_help()
         return
-    # Load plugins eagerly
+    # Load settings
+    settings = gpt5_config.load_settings(Path.cwd())
+    # Load plugins eagerly (if enabled)
     pdir = Path(__file__).resolve().parent.parent / "plugins"
-    plugin_modules = [load_plugin(p) for p in discover_plugins(pdir)]
+    plugin_modules = [load_plugin(p) for p in discover_plugins(pdir)] if settings.get("plugins", {}).get("enabled", True) else []
 
     # Always-on deficiency detector wrapper
     detector = DeficiencyDetector(memory=_memory())

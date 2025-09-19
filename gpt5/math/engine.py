@@ -55,3 +55,11 @@ def minimize_expression(expr: str, vars_order: List[str], x0: List[float]) -> Tu
     res = optimize.minimize(fun, np.asarray(x0, dtype=float), method="L-BFGS-B")
     return res.x, float(res.fun)
 
+
+def fft_real(data: ArrayLike, sample_rate: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+    x = np.asarray(data, dtype=float)
+    n = x.size
+    yf = np.fft.rfft(x)
+    xf = np.fft.rfftfreq(n, d=1.0 / sample_rate if sample_rate > 0 else 1.0)
+    mag = np.abs(yf) / max(1, n)
+    return xf, mag
