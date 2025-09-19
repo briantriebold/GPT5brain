@@ -263,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--constraints", nargs="*", default=None)
     execute.add_argument("--strategy", choices=["pipeline", "broadcast", "roundrobin"], default="pipeline")
     execute.add_argument("--report", help="Optional path to save a rich Markdown report")
+    execute.add_argument("--html", help="Optional path to save a standalone HTML report")
     execute.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
     def cmd_execute(args: argparse.Namespace) -> None:  # noqa: ANN001
         from dataclasses import replace
@@ -355,6 +356,9 @@ def build_parser() -> argparse.ArgumentParser:
             Path(args.report).resolve().write_text(report, encoding="utf-8")
         memory.save_spec(f"execution:{args.objective}", report, metadata={"objective": args.objective, "strategy": args.strategy})
         _print({"status": "executed", "tasks": len(completed), "strategy": args.strategy}, args.json)
+        if args.html:
+            html_text = report_html.render_html(report, title=f"execution:{args.objective}")
+            Path(args.html).resolve().write_text(html_text, encoding="utf-8")
         try:
             settings = gpt5_config.load_settings(Path.cwd())
             ae = settings.get("autoExport", {})
@@ -486,6 +490,31 @@ def build_parser() -> argparse.ArgumentParser:
         _print({"peaks": peaks, "n": len(data)}, args.json)
     mf.set_defaults(func=cmd_math_fft)
 
+    mp = math_sub.add_parser("polyfit", help="Polynomial least squares fit")
+    mp.add_argument("--x", required=True, help="JSON array of x values")
+    mp.add_argument("--y", required=True, help="JSON array of y values")
+    mp.add_argument("--deg", type=int, required=True)
+    mp.add_argument("--json", action="store_true")
+    def cmd_math_polyfit(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        x = _json.loads(args.x)
+        y = _json.loads(args.y)
+        coeffs = math_engine.polyfit_fit(x, y, args.deg)
+        _print({"coeffs": [float(c) for c in coeffs]}, args.json)
+    mp.set_defaults(func=cmd_math_polyfit)
+
+    mr = math_sub.add_parser("root", help="Solve f(var)=0 for root")
+    mr.add_argument("expr")
+    mr.add_argument("var")
+    mr.add_argument("--x0", type=float)
+    mr.add_argument("--a", type=float)
+    mr.add_argument("--b", type=float)
+    mr.add_argument("--json", action="store_true")
+    def cmd_math_root(args: argparse.Namespace) -> None:  # noqa: ANN001
+        root = math_engine.solve_root(args.expr, args.var, x0=args.x0, a=args.a, b=args.b)
+        _print({"root": float(root)}, args.json)
+    mr.set_defaults(func=cmd_math_root)
+
 
     plan = sub.add_parser("plan", help="Generate execution plan")
     plan.add_argument("objective")
@@ -570,11 +599,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Git ops
     git = sub.add_parser("git", help="Basic git operations")
-    git.add_argument("action", choices=["init", "status", "add", "commit", "branch", "checkout", "current", "push"])
+    git.add_argument("action", choices=["init", "status", "add", "commit", "branch", "checkout", "current", "push", "remote-add", "remote-list"])
     git.add_argument("--path", default=str(Path.cwd()))
     git.add_argument("--message", default="update")
     git.add_argument("--name", help="Branch name")
     git.add_argument("--remote", default="origin")
+    git.add_argument("--url", help="Remote URL for remote-add")
     git.add_argument("--json", action="store_true")
     def cmd_git(args: argparse.Namespace) -> None:  # noqa: ANN001
         if args.action == "init":
@@ -602,6 +632,13 @@ def build_parser() -> argparse.ArgumentParser:
                 # If no branch provided, use current
                 args.name = git_ops.git_current_branch(args.path)
             out = git_ops.git_push(args.path, args.remote, args.name)
+        elif args.action == "remote-add":
+            if not args.url or not args.remote:
+                _print({"error": "--url and --remote required"}, args.json)
+                return
+            out = git_ops.git_remote_add(args.path, args.remote, args.url)
+        elif args.action == "remote-list":
+            out = git_ops.git_remote_list(args.path)
         else:
             out = ""
         _print({"out": out}, args.json)
@@ -780,6 +817,7 @@ def build_parser() -> argparse.ArgumentParser:
     mstart.add_argument("--constraints", nargs="*", default=None)
     mstart.add_argument("--strategy", choices=["pipeline", "broadcast", "roundrobin"], default="pipeline")
     mstart.add_argument("--report", help="Optional path to save mission report")
+    mstart.add_argument("--html", help="Optional path to save a standalone HTML mission report")
     mstart.add_argument("--json", action="store_true")
     def cmd_mission_start(args: argparse.Namespace) -> None:  # noqa: ANN001
         memory = _memory()
@@ -874,6 +912,9 @@ def build_parser() -> argparse.ArgumentParser:
         memory.save_spec(f"mission:{mid}:execution", report, metadata={"objective": args.objective, "strategy": args.strategy})
         memory.mission_update(mid, status="complete", progress=1.0, report=report)
         _print({"mission": mid, "status": "complete", "tasks": len(completed), "strategy": args.strategy}, args.json)
+        if args.html:
+            html_text = report_html.render_html(report, title=f"mission:{mid}:execution")
+            Path(args.html).resolve().write_text(html_text, encoding="utf-8")
         try:
             settings = gpt5_config.load_settings(Path.cwd())
             ae = settings.get("autoExport", {})

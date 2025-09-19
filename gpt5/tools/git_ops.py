@@ -47,3 +47,11 @@ def git_push(path: str, remote: str, branch: str, set_upstream: bool = True) -> 
     else:
         cmd.extend([remote, branch])
     return _run(cmd)
+
+
+def git_remote_add(path: str, name: str, url: str) -> str:
+    return _run(["git", "-C", path, "remote", "add", name, url])
+
+
+def git_remote_list(path: str = ".") -> str:
+    return _run(["git", "-C", path, "remote", "-v"]) 
