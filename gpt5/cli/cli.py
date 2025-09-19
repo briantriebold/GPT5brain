@@ -340,6 +340,16 @@ def build_parser() -> argparse.ArgumentParser:
         report_lines.append("")
         report_lines.append("## Diagram")
         report_lines.extend(mer)
+        # Gantt timeline (sequential synthetic timing)
+        gantt = ["```mermaid", "gantt", "    dateFormat  X", "    title Execution Timeline", "    section Tasks"]
+        for i, _t in enumerate(completed):
+            start = i
+            dur = 1
+            gantt.append(f"    T{i} : {start}, {dur}")
+        gantt.append("```")
+        report_lines.append("")
+        report_lines.append("## Timeline")
+        report_lines.extend(gantt)
         report = "\n".join(report_lines)
         if args.report:
             Path(args.report).resolve().write_text(report, encoding="utf-8")
@@ -653,6 +663,115 @@ def build_parser() -> argparse.ArgumentParser:
         _print({"status": "saved", "path": str(outp)}, args.json)
     rhtml.set_defaults(func=cmd_report_html)
 
+    # Optimize-now (chain mission -> regressions -> dashboard -> export latest)
+    opt = sub.add_parser("optimize", help="Self-optimization utilities")
+    opt_sub = opt.add_subparsers(dest="opt_cmd")
+    onow = opt_sub.add_parser("now")
+    onow.add_argument("--objective", default="Self-Optimization Now")
+    onow.add_argument("--strategy", choices=["pipeline", "broadcast", "roundrobin"], default="pipeline")
+    onow.add_argument("--json", action="store_true")
+    def cmd_optimize_now(args: argparse.Namespace) -> None:  # noqa: ANN001
+        # 1) Mission run
+        mem = _memory()
+        mid = mem.mission_create(args.objective, status="planning")
+        items = planning_module.generate_plan(args.objective)
+        flat: list[Task] = []
+        for it in items:
+            flat.extend(it.tasks)
+        profiles = [
+            swarm_module.AgentProfile(name="planner", description="Planning agent", capabilities=["analysis", "planning"]),
+            swarm_module.AgentProfile(name="designer", description="Design agent", capabilities=["design", "process"]),
+            swarm_module.AgentProfile(name="builder", description="Implementation agent", capabilities=["build"]),
+            swarm_module.AgentProfile(name="qa", description="Quality agent", capabilities=["qa"]),
+        ]
+        def handler_factory(profile: swarm_module.AgentProfile):
+            def handler(task: Task, agent, context):  # noqa: ANN001
+                return f"{profile.name} handled task '{task.title}'"
+            return handler
+        orch = swarm_module.spawn_swarm(swarm_module.SwarmConfig(name="optimize", agent_profiles=profiles), handler_factory)
+        from dataclasses import replace
+        completed: list[Task] = []
+        if args.strategy == "pipeline":
+            for t in flat:
+                completed.append(orch.run_task(t))
+        elif args.strategy == "broadcast":
+            for t in flat:
+                for _a in orch.agents.values():
+                    completed.append(orch.run_task(replace(t, assigned_agent=_a.name)))
+        else:
+            names = list(orch.agents.keys())
+            for i, t in enumerate(flat):
+                a = orch.agents[names[i % len(names)]]
+                completed.append(orch.run_task(replace(t, assigned_agent=a.name)))
+        from gpt5.tools.reporting import format_task_report
+        report_lines = [
+            f"# Optimize Report — {args.objective}",
+            "",
+            f"Strategy: {args.strategy}",
+            "",
+            "## Tasks",
+            format_task_report(completed),
+        ]
+        # simple mermaid
+        mer = ["```mermaid", "flowchart TD"]
+        last = None
+        for i, t in enumerate(completed):
+            nid = f"T{i}"
+            mer.append(f"    {nid}([" + t.title.replace('"','\"') + "]):::task")
+            if last is not None:
+                mer.append(f"    {last} --> {nid}")
+            last = nid
+        mer.append("    classDef task fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px;")
+        mer.append("```")
+        report_lines.append("")
+        report_lines.append("## Diagram")
+        report_lines.extend(mer)
+        report = "\n".join(report_lines)
+        mem.save_spec(f"mission:{mid}:execution", report, metadata={"objective": args.objective, "strategy": args.strategy})
+        mem.mission_update(mid, status="complete", progress=1.0, report=report)
+
+        # 2) Run regressions
+        import subprocess, sys as _sys, json as _json
+        rows = mem.list_regressions(None)
+        reg_results = []
+        for r in rows:
+            rid, sig, argv_json = r[0], r[1], r[2]
+            argv = _json.loads(argv_json)
+            cp = subprocess.run([_sys.executable, "-m", "gpt5", *argv], capture_output=True, text=True)
+            ok = cp.returncode == 0
+            mem.update_regression_result(rid, ok, (cp.stdout or "")[-400:] + (cp.stderr or "")[-400:])
+            reg_results.append({"id": rid, "signature": sig, "pass": ok})
+
+        # 3) Dashboard refresh
+        defs = mem.list_deficiencies()
+        by_status = {"open": 0, "proposed": 0, "mitigated": 0}
+        top = sorted(({"signature": d[1], "count": d[3], "status": d[4]} for d in defs), key=lambda x: x["count"], reverse=True)
+        for d in defs:
+            st = d[4] or "open"
+            if st not in by_status:
+                by_status[st] = 0
+            by_status[st] += 1
+        total_reg = len(rows)
+        passed = sum(1 for _r in mem.list_regressions(None) if _r[3] == "passed")
+        failed = sum(1 for _r in mem.list_regressions(None) if _r[3] == "failed")
+        md = ["# Deficiency Dashboard", "", "## Status Summary", f"- Open: {by_status.get('open',0)}", f"- Proposed: {by_status.get('proposed',0)}", f"- Mitigated: {by_status.get('mitigated',0)}", "", "## Top Signatures"]
+        for item in top[:10]:
+            md.append(f"- {item['signature']} — count: {item['count']} — status: {item['status']}")
+        md.extend(["", "## Regression Summary", f"- Total regressions: {total_reg}", f"- Passed: {passed}", f"- Failed: {failed}"])
+        dash = "\n".join(md)
+        mem.save_spec("deficiency:dashboard", dash, metadata={"open": by_status.get('open',0), "proposed": by_status.get('proposed',0), "mitigated": by_status.get('mitigated',0), "regressions": total_reg, "passed": passed, "failed": failed})
+
+        # 4) Export latest mission and dashboard to HTML
+        settings = gpt5_config.load_settings(Path.cwd())
+        outdir = Path(settings.get("autoExport", {}).get("dir", "reports"))
+        ensure_dir(outdir)
+        # mission html
+        from gpt5.tools import report_html as _rhtml
+        (outdir / sanitize_filename(f"mission:{mid}:execution.html")).write_text(_rhtml.render_html(report, title=f"mission:{mid}:execution"), encoding="utf-8")
+        (outdir / sanitize_filename("deficiency:dashboard.html")).write_text(_rhtml.render_html(dash, title="deficiency:dashboard"), encoding="utf-8")
+        _print({"mission": mid, "regressions": reg_results, "dashboard": {"open": by_status.get('open',0), "proposed": by_status.get('proposed',0), "mitigated": by_status.get('mitigated',0)}}, args.json)
+    onow.set_defaults(func=cmd_optimize_now)
+
     # Mission autopilot
     mission = sub.add_parser("mission", help="Autopilot planâ†’executeâ†’learn")
     mission_sub = mission.add_subparsers(dest="mission_cmd")
@@ -739,6 +858,16 @@ def build_parser() -> argparse.ArgumentParser:
         report_lines.append("")
         report_lines.append("## Diagram")
         report_lines.extend(mer)
+        # Gantt timeline (sequential synthetic timing)
+        gantt = ["```mermaid", "gantt", "    dateFormat  X", "    title Mission Timeline", "    section Tasks"]
+        for i, _t in enumerate(completed):
+            start = i
+            dur = 1
+            gantt.append(f"    T{i} : {start}, {dur}")
+        gantt.append("```")
+        report_lines.append("")
+        report_lines.append("## Timeline")
+        report_lines.extend(gantt)
         report = "\n".join(report_lines)
         if args.report:
             Path(args.report).resolve().write_text(report, encoding="utf-8")
