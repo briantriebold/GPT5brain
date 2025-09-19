@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: gpt5-local-jarvis
+Version: 0.1.0
+Summary: Local Jarvis-style orchestration: planning, PRD, process, memory, swarm, web tool
+Author: Local User
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.11
+Requires-Dist: sympy>=1.12
+Requires-Dist: matplotlib>=3.8
+
+# GPT5 Orchestration System (CLI)
+
+Local, modular orchestration for planning, PRD generation, process mapping,
+checklists, swarm execution, evergreen memory, and a simple web fetcher.
+
+Quick start (PowerShell):
+- python -m venv .venv
+- .\.venv\Scripts\python -m pip install -e .
+- .\.venv\Scripts\gpt5 --help
+

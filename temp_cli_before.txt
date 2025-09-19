@@ -1,0 +1,656 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from gpt5.core.memory import MemoryStore
+from gpt5.core.tasks import Task
+from gpt5.modules import checklist as checklist_module
+from gpt5.modules import planning as planning_module
+from gpt5.modules import prd as prd_module
+from gpt5.modules import process_map as process_map_module
+from gpt5.modules import crawl as crawl_module
+from gpt5.modules import feature_map as fmap_module
+from gpt5.modules import impl_plan as impl_module
+from gpt5.modules import swarm as swarm_module
+from gpt5.modules import web as web_module
+from gpt5.modules import wisdom as wisdom_module
+from gpt5.tools import reporting as reporting_tool
+from gpt5.math import engine as math_engine
+from gpt5.plugins.loader import discover_plugins, load_plugin, before_command_all, after_command_all
+from gpt5.tools import git_ops
+from gpt5.modules.deficiency import DeficiencyDetector
+
+DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.db"
+
+
+def _memory() -> MemoryStore:
+    return MemoryStore(path=DATA_PATH)
+
+
+def _write(path: Path, content: str, force: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"File already exists: {path}")
+    path.write_text(content, encoding="utf-8")
+
+
+def _print(data: Any, as_json: bool) -> None:  # noqa: ANN401
+    if as_json:
+        print(json.dumps(data, ensure_ascii=False))
+    else:
+        if isinstance(data, str):
+            print(data)
+        else:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    _ = _memory()  # Ensures DB and directories exist
+    _print({"memory": str(DATA_PATH), "status": "initialized"}, args.json)
+
+
+def cmd_plan(args: argparse.Namespace) -> None:
+    plan_items = planning_module.generate_plan(args.objective, constraints=args.constraints)
+    if args.json:
+        data = [
+            {
+                "title": item.title,
+                "description": item.description,
+                "tasks": [
+                    {"title": t.title, "description": t.description, "capabilities": t.capabilities}
+                    for t in item.tasks
+                ],
+            }
+            for item in plan_items
+        ]
+        _print(data, True)
+        return
+    for item in plan_items:
+        print(f"## {item.title}")
+        print(item.description)
+        for task in item.tasks:
+            print(f"- {task.title}: {task.description}")
+        print()
+
+
+def cmd_prd(args: argparse.Namespace) -> None:
+    memory = _memory()
+    prd = prd_module.create_prd(name=args.name, author=args.author or "unknown")
+    markdown = prd.to_markdown()
+    output_path = Path(args.output).resolve() if args.output else Path.cwd() / f"{args.name.replace(' ', '_')}.prd.md"
+    output_path.write_text(markdown, encoding="utf-8")
+    memory.save_spec(args.name, markdown, metadata={"author": prd.author})
+    _print({"path": str(output_path), "name": args.name, "author": prd.author}, args.json)
+
+
+def cmd_checklist(args: argparse.Namespace) -> None:
+    checklist = checklist_module.create_execution_checklist(args.phase)
+    if args.json:
+        data = {
+            "name": checklist.name,
+            "items": [
+                {"name": i.name, "description": i.description, "completed": i.completed}
+                for i in checklist.items
+            ],
+        }
+        _print(data, True)
+        return
+    print(f"Checklist: {checklist.name}")
+    for item in checklist.items:
+        status = "[ ]"
+        print(f"{status} {item.name} - {item.description}")
+
+
+def cmd_process(args: argparse.Namespace) -> None:
+    items = planning_module.generate_plan(args.objective)
+    flat: list[Task] = []
+    for item in items:
+        flat.extend(item.tasks)
+    text = process_map_module.default_process_for_plan(flat)
+    _print(text, args.json)
+
+
+def cmd_swarm(args: argparse.Namespace) -> None:
+    profiles = [
+        swarm_module.AgentProfile(name="planner", description="Planning agent", capabilities=["analysis", "planning"]),
+        swarm_module.AgentProfile(name="designer", description="Design agent", capabilities=["design", "process"]),
+        swarm_module.AgentProfile(name="builder", description="Implementation agent", capabilities=["build"]),
+        swarm_module.AgentProfile(name="qa", description="Quality agent", capabilities=["qa"]),
+    ]
+
+    def handler_factory(profile: swarm_module.AgentProfile):
+        def handler(task: Task, agent, context):  # noqa: ANN001
+            return f"{profile.name} handled task '{task.title}'"
+
+        return handler
+
+    orchestrator = swarm_module.spawn_swarm(
+        swarm_module.SwarmConfig(name=args.name or "default", agent_profiles=profiles), handler_factory
+    )
+    tasks = [Task(title="example", description="Demonstrate swarm execution", capabilities=["analysis"])]
+    completed = swarm_module.allocate_tasks(orchestrator, tasks)
+
+    if args.json:
+        data = [{"title": t.title, "status": t.status, "result": t.result} for t in completed]
+        _print(data, True)
+        return
+
+    print(reporting_tool.format_task_report(completed))
+
+
+def cmd_web(args: argparse.Namespace) -> None:
+    memory = _memory() if args.cache else None
+    fetcher = web_module.create_web_tool(memory=memory)
+    content = fetcher.fetch(args.url)
+    if args.json:
+        _print({"url": args.url, "content": content[: args.limit]}, True)
+        return
+    print(content[: args.limit])
+
+
+def cmd_wisdom(args: argparse.Namespace) -> None:
+    memory = _memory()
+    lesson = wisdom_module.lesson_template(args.event, args.impact, args.mitigation)
+    wisdom_module.record_lesson(memory, lesson)
+    _print({"status": "recorded", "topic": args.event}, args.json)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="GPT5 orchestration CLI")
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    sub = parser.add_subparsers(dest="command")
+
+    init = sub.add_parser("init", help="Initialize local memory and folders")
+    init.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    init.set_defaults(func=cmd_init)
+
+    crawl = sub.add_parser("crawl", help="Crawl URLs and capture features into memory")
+    crawl.add_argument("urls", nargs="+")
+    crawl.add_argument("--max-bullets", type=int, default=200)
+    crawl.add_argument("--prefer-readme", action="store_true", help="Prefer README.md extraction for GitHub repos")
+    crawl.add_argument("--refresh", action="store_true", help="Bypass cache and refetch content")
+    crawl.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    def cmd_crawl(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        results = crawl_module.crawl_and_capture(
+            memory, args.urls, max_bullets=args.max_bullets, prefer_readme=args.prefer_readme, refresh=args.refresh
+        )
+        payload = [
+            {"url": r.url, "spec": r.spec_name, "headings": r.headings_count, "bullets": r.bullets_count}
+            for r in results
+        ]
+        _print(payload, args.json)
+    crawl.set_defaults(func=cmd_crawl)
+
+    featuremap = sub.add_parser("featuremap", help="Build a consolidated feature map from crawled specs")
+    featuremap.add_argument("--name", default="Claude-Flow + Specify7 Feature Map")
+    featuremap.add_argument("--sources", nargs="*", help="Explicit spec names (defaults to all crawl: specs)")
+    featuremap.add_argument("--output", help="Output markdown path (defaults to ./FEATURE_MAP.md)")
+    featuremap.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    def cmd_featuremap(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        sources = args.sources or memory.find_specs_by_prefix("crawl:")
+        if not sources:
+            _print({"status": "no-sources"}, args.json)
+            return
+        md = fmap_module.build_feature_map(memory, sources, title=args.name)
+        out = Path(args.output).resolve() if args.output else (Path.cwd() / "FEATURE_MAP.md")
+        out.write_text(md, encoding="utf-8")
+        memory.save_spec(args.name, md, metadata={"type": "feature-map", "sources": sources})
+        _print({"status": "saved", "path": str(out), "sources": sources}, args.json)
+    featuremap.set_defaults(func=cmd_featuremap)
+
+    implplan = sub.add_parser("impl-plan", help="Generate an Implementation Plan PRD from a feature map")
+    implplan.add_argument("--from-featuremap", default="Claude-Flow + Specify7 Feature Map")
+    implplan.add_argument("--name", default="GPT5 Implementation Plan")
+    implplan.add_argument("--author", default="unknown")
+    implplan.add_argument("--output")
+    implplan.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    def cmd_implplan(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        md = impl_module.implementation_plan_from_feature_map(memory, args.from_featuremap, args.name, args.author)
+        out = Path(args.output).resolve() if args.output else (Path.cwd() / "IMPLEMENTATION_PLAN.md")
+        out.write_text(md, encoding="utf-8")
+        memory.save_spec(args.name, md, metadata={"type": "impl-plan", "from": args.from_featuremap})
+        _print({"status": "saved", "path": str(out)}, args.json)
+    implplan.set_defaults(func=cmd_implplan)
+
+    execute = sub.add_parser("execute", help="Execute a plan for an objective (simulated swarm)")
+    execute.add_argument("--objective", required=True)
+    execute.add_argument("--constraints", nargs="*", default=None)
+    execute.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    def cmd_execute(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        items = planning_module.generate_plan(args.objective, constraints=args.constraints)
+        flat: list[Task] = []
+        for it in items:
+            flat.extend(it.tasks)
+        profiles = [
+            swarm_module.AgentProfile(name="planner", description="Planning agent", capabilities=["analysis", "planning"]),
+            swarm_module.AgentProfile(name="designer", description="Design agent", capabilities=["design", "process"]),
+            swarm_module.AgentProfile(name="builder", description="Implementation agent", capabilities=["build"]),
+            swarm_module.AgentProfile(name="qa", description="Quality agent", capabilities=["qa"]),
+        ]
+        def handler_factory(profile: swarm_module.AgentProfile):
+            def handler(task: Task, agent, context):  # noqa: ANN001
+                return f"{profile.name} handled task '{task.title}'"
+            return handler
+        orch = swarm_module.spawn_swarm(swarm_module.SwarmConfig(name="exec", agent_profiles=profiles), handler_factory)
+        completed = orch.run_tasks(flat)
+        from gpt5.tools.reporting import format_task_report
+        report = format_task_report(completed)
+        memory.save_spec(f"execution:{args.objective}", report, metadata={"objective": args.objective})
+        _print({"status": "executed", "tasks": len(completed)}, args.json)
+    execute.set_defaults(func=cmd_execute)
+
+    math = sub.add_parser("math", help="Advanced mathematics processing")
+    math_sub = math.add_subparsers(dest="math_cmd")
+    me = math_sub.add_parser("expr", help="Evaluate expression with variables")
+    me.add_argument("expr")
+    me.add_argument("--vars", help="JSON of variables, e.g. {\"x\":2}")
+    me.add_argument("--var", action="append", help="key=value (repeatable)")
+    me.add_argument("--json", action="store_true")
+    def cmd_math_expr(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        vars_map = _json.loads(args.vars) if args.vars else {}
+        if args.var:
+            for kv in args.var:
+                if "=" not in kv:
+                    continue
+                k, v = kv.split("=", 1)
+                try:
+                    vars_map[k] = float(v)
+                except ValueError:
+                    pass
+        val = math_engine.evaluate_expression(args.expr, vars_map)
+        _print({"expr": args.expr, "value": val}, args.json)
+    me.set_defaults(func=cmd_math_expr)
+
+    ms = math_sub.add_parser("solve", help="Solve linear system Ax=b")
+    ms.add_argument("--A", required=True, help="JSON matrix")
+    ms.add_argument("--b", required=True, help="JSON vector")
+    ms.add_argument("--json", action="store_true")
+    def cmd_math_solve(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        A = _json.loads(args.A)
+        b = _json.loads(args.b)
+        x = math_engine.solve_linear(A, b)
+        _print({"x": x.tolist()}, args.json)
+    ms.set_defaults(func=cmd_math_solve)
+
+    mi = math_sub.add_parser("integrate", help="Definite integral")
+    mi.add_argument("expr")
+    mi.add_argument("var")
+    mi.add_argument("a", type=float)
+    mi.add_argument("b", type=float)
+    mi.add_argument("--json", action="store_true")
+    def cmd_math_integrate(args: argparse.Namespace) -> None:  # noqa: ANN001
+        val = math_engine.integrate_definite(args.expr, args.var, args.a, args.b)
+        _print({"value": val}, args.json)
+    mi.set_defaults(func=cmd_math_integrate)
+
+    mo = math_sub.add_parser("optimize", help="Minimize expression f(vars)")
+    mo.add_argument("expr")
+    mo.add_argument("--vars", required=True, help="Comma-separated variable names")
+    mo.add_argument("--x0", required=True, help="JSON array initial guess")
+    mo.add_argument("--json", action="store_true")
+    def cmd_math_opt(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        vars_order = [v.strip() for v in args.vars.split(",") if v.strip()]
+        x0 = _json.loads(args.x0)
+        x, fval = math_engine.minimize_expression(args.expr, vars_order, x0)
+        _print({"x": x.tolist(), "f": fval}, args.json)
+    mo.set_defaults(func=cmd_math_opt)
+
+
+    plan = sub.add_parser("plan", help="Generate execution plan")
+    plan.add_argument("objective")
+    plan.add_argument("--constraints", nargs="*", default=None)
+    plan.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    plan.set_defaults(func=cmd_plan)
+
+    prd = sub.add_parser("prd", help="Create PRD")
+    prd.add_argument("name")
+    prd.add_argument("--author")
+    prd.add_argument("--output")
+    prd.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    prd.set_defaults(func=cmd_prd)
+
+    checklist = sub.add_parser("checklist", help="Generate checklist for phase")
+    checklist.add_argument("phase")
+    checklist.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    checklist.set_defaults(func=cmd_checklist)
+
+    process = sub.add_parser("process", help="Render process map for objective")
+    process.add_argument("objective")
+    process.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    process.set_defaults(func=cmd_process)
+
+    swarm = sub.add_parser("swarm", help="Spawn demo swarm")
+    swarm.add_argument("--name")
+    swarm.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    swarm.set_defaults(func=cmd_swarm)
+
+    web = sub.add_parser("web", help="Fetch web content")
+    web.add_argument("url")
+    web.add_argument("--limit", type=int, default=2000)
+    web.add_argument("--cache", action="store_true")
+    web.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    web.set_defaults(func=cmd_web)
+
+    wisdom = sub.add_parser("wisdom", help="Store lesson learned")
+    wisdom.add_argument("event")
+    wisdom.add_argument("impact")
+    wisdom.add_argument("mitigation")
+    wisdom.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    wisdom.set_defaults(func=cmd_wisdom)
+
+    # Plugins
+    plugins = sub.add_parser("plugins", help="Manage plugins")
+    plugins.add_argument("action", choices=["list", "load"])
+    plugins.add_argument("--dir", default=str((Path(__file__).resolve().parent.parent / "plugins")))
+    plugins.add_argument("--name", help="Plugin filename to load")
+    plugins.add_argument("--json", action="store_true")
+    def cmd_plugins(args: argparse.Namespace) -> None:  # noqa: ANN001
+        pdir = Path(args.dir)
+        if args.action == "list":
+            paths = [str(p.name) for p in discover_plugins(pdir)]
+            _print({"plugins": paths}, args.json)
+        elif args.action == "load":
+            if not args.name:
+                _print({"error": "--name required"}, args.json)
+                return
+            mod = load_plugin(pdir / args.name)
+            _print({"loaded": getattr(mod, "__name__", args.name)}, args.json)
+    plugins.set_defaults(func=cmd_plugins)
+
+    # Memory search
+    mem = sub.add_parser("memory", help="Memory utilities")
+    mem_sub = mem.add_subparsers(dest="mem_cmd")
+    msrch = mem_sub.add_parser("search", help="Search indexed text by tokens")
+    msrch.add_argument("query")
+    msrch.add_argument("--top", type=int, default=5)
+    msrch.add_argument("--json", action="store_true")
+    def cmd_mem_search(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        _print({"results": memory.search_text(args.query, top_k=args.top)}, args.json)
+    msrch.set_defaults(func=cmd_mem_search)
+
+    mindx = mem_sub.add_parser("reindex", help="Rebuild token index from all specs")
+    mindx.add_argument("--json", action="store_true")
+    def cmd_mem_reindex(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        n = memory.index_all_specs()
+        _print({"indexed": n}, args.json)
+    mindx.set_defaults(func=cmd_mem_reindex)
+
+    # Git ops
+    git = sub.add_parser("git", help="Basic git operations")
+    git.add_argument("action", choices=["init", "status", "add", "commit"])
+    git.add_argument("--path", default=str(Path.cwd()))
+    git.add_argument("--message", default="update")
+    git.add_argument("--json", action="store_true")
+    def cmd_git(args: argparse.Namespace) -> None:  # noqa: ANN001
+        if args.action == "init":
+            out = git_ops.git_init(args.path)
+        elif args.action == "status":
+            out = git_ops.git_status(args.path)
+        elif args.action == "add":
+            out = git_ops.git_add_all(args.path)
+        elif args.action == "commit":
+            out = git_ops.git_commit(args.path, message=args.message)
+        else:
+            out = ""
+        _print({"out": out}, args.json)
+    git.set_defaults(func=cmd_git)
+
+    # Mission autopilot
+    mission = sub.add_parser("mission", help="Autopilot plan→execute→learn")
+    mission_sub = mission.add_subparsers(dest="mission_cmd")
+    mstart = mission_sub.add_parser("start")
+    mstart.add_argument("objective")
+    mstart.add_argument("--constraints", nargs="*", default=None)
+    mstart.add_argument("--json", action="store_true")
+    def cmd_mission_start(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        mid = memory.mission_create(args.objective, status="planning")
+        items = planning_module.generate_plan(args.objective, constraints=args.constraints)
+        flat: list[Task] = []
+        for it in items:
+            flat.extend(it.tasks)
+        profiles = [
+            swarm_module.AgentProfile(name="planner", description="Planning agent", capabilities=["analysis", "planning"]),
+            swarm_module.AgentProfile(name="designer", description="Design agent", capabilities=["design", "process"]),
+            swarm_module.AgentProfile(name="builder", description="Implementation agent", capabilities=["build"]),
+            swarm_module.AgentProfile(name="qa", description="Quality agent", capabilities=["qa"]),
+        ]
+        def handler_factory(profile: swarm_module.AgentProfile):
+            def handler(task: Task, agent, context):  # noqa: ANN001
+                return f"{profile.name} handled task '{task.title}'"
+            return handler
+        orch = swarm_module.spawn_swarm(swarm_module.SwarmConfig(name="mission", agent_profiles=profiles), handler_factory)
+        memory.mission_update(mid, status="executing", progress=0.3)
+        completed = orch.run_tasks(flat)
+        from gpt5.tools.reporting import format_task_report
+        report = format_task_report(completed)
+        memory.save_spec(f"mission:{mid}:execution", report, metadata={"objective": args.objective})
+        memory.mission_update(mid, status="complete", progress=1.0, report=report)
+        _print({"mission": mid, "status": "complete", "tasks": len(completed)}, args.json)
+    mstart.set_defaults(func=cmd_mission_start)
+
+    mstatus = mission_sub.add_parser("status")
+    mstatus.add_argument("--json", action="store_true")
+    def cmd_mission_status(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        rows = memory.missions()
+        _print({"missions": [
+            {"id": r[0], "objective": r[1], "status": r[2], "progress": r[3], "created_at": r[4], "updated_at": r[5]}
+            for r in rows
+        ]}, args.json)
+    mstatus.set_defaults(func=cmd_mission_status)
+
+    # Deficiency controls
+    defi = sub.add_parser("deficiency", help="Deficiency detector controls")
+    defi_sub = defi.add_subparsers(dest="defi_cmd")
+    dlist = defi_sub.add_parser("list")
+    dlist.add_argument("--json", action="store_true")
+    def cmd_defi_list(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        rows = memory.list_deficiencies()
+        _print({
+            "deficiencies": [
+                {"id": r[0], "signature": r[1], "pattern": r[2], "count": r[3], "status": r[4], "updated_at": r[5]}
+                for r in rows
+            ]
+        }, args.json)
+    dlist.set_defaults(func=cmd_defi_list)
+
+    ddetail = defi_sub.add_parser("detail")
+    ddetail.add_argument("signature")
+    ddetail.add_argument("--json", action="store_true")
+    def cmd_defi_detail(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        row = memory.get_deficiency(args.signature)
+        if not row:
+            _print({"error": "not-found"}, args.json)
+            return
+        payload = {
+            "id": row[0],
+            "signature": row[1],
+            "pattern": row[2],
+            "count": row[3],
+            "last_error": row[4],
+            "last_context": row[5],
+            "status": row[6],
+            "countermeasure": row[7],
+            "created_at": row[8],
+            "updated_at": row[9],
+        }
+        _print(payload, args.json)
+    ddetail.set_defaults(func=cmd_defi_detail)
+
+    dapply = defi_sub.add_parser("apply")
+    dapply.add_argument("signature", help="Deficiency signature to mitigate")
+    dapply.add_argument("--json", action="store_true")
+    def cmd_defi_apply(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        sig = args.signature
+        # For known JSONDecodeError on math vars, generate an adapter plugin
+        created = None
+        if sig.startswith("JSONDecodeError"):
+            plugin_path = Path(__file__).resolve().parent.parent / "plugins" / "json_vars_adapter.py"
+            if not plugin_path.exists():
+                code = (
+                    "from __future__ import annotations\n\n"
+                    "def _kv_to_json(s: str) -> str:\n"
+                    "    s = s.strip()\n"
+                    "    if s.startswith('{') and s.endswith('}'):\n"
+                    "        # fix single quotes\n"
+                    "        return s.replace("'", '"')\n"
+                    "    # parse key=value pairs split by comma or space\n"
+                    "    parts = [p for ch in ', ' for p in s.replace('\n',' ').split(ch) if p]\n"
+                    "    kv = {}\n"
+                    "    for p in parts:\n"
+                    "        if '=' in p:\n"
+                    "            k,v = p.split('=',1)\n"
+                    "            try:\n"
+                    "                kv[k.strip()] = float(v)\n"
+                    "            except Exception:\n"
+                    "                pass\n"
+                    "    if kv:\n"
+                    "        import json as _json\n"
+                    "        return _json.dumps(kv)\n"
+                    "    return s\n\n"
+                    "def before_command(args):\n"
+                    "    # Adapt math expr --vars when it's not valid JSON\n"
+                    "    if getattr(args,'command',None) == 'math' and getattr(args,'math_cmd',None) == 'expr':\n"
+                    "        s = getattr(args, 'vars', None)\n"
+                    "        if isinstance(s, str) and s:\n"
+                    "            try:\n"
+                    "                import json as _json\n"
+                    "                _json.loads(s)\n"
+                    "            except Exception:\n"
+                    "                fixed = _kv_to_json(s)\n"
+                    "                setattr(args, 'vars', fixed)\n"
+                )
+                plugin_path.write_text(code, encoding="utf-8")
+                created = str(plugin_path)
+            memory.set_deficiency_countermeasure(sig, f"plugin:{plugin_path.name}", status="mitigated")
+            _print({"status": "applied", "plugin": created or str(plugin_path)}, args.json)
+            return
+        _print({"status": "no-template", "signature": sig}, args.json)
+    # New streamlined apply that uses module helper and seeds regression
+    def cmd_defi_apply2(args: argparse.Namespace) -> None:  # noqa: ANN001
+        from gpt5.modules.deficiency import DeficiencyDetector
+        memory = _memory()
+        sig = args.signature
+        if sig.startswith("JSONDecodeError"):
+            det = DeficiencyDetector(memory)
+            plugin_path = det.ensure_json_vars_adapter_plugin()
+            memory.set_deficiency_countermeasure(sig, f"plugin:{Path(plugin_path).name}", status="mitigated")
+            try:
+                import json as _json
+                argv = ["math", "expr", "sin(x)", "--vars", "x=1.2", "--json"]
+                memory.add_regression(sig, _json.dumps(argv))
+            except Exception:
+                pass
+            _print({"status": "applied", "plugin": plugin_path}, args.json)
+            return
+        _print({"status": "no-template", "signature": sig}, args.json)
+    dapply.set_defaults(func=cmd_defi_apply2)
+
+    # Regression harness
+    reg = sub.add_parser("regression", help="Regression tests for deficiencies")
+    reg_sub = reg.add_subparsers(dest="reg_cmd")
+
+    radd = reg_sub.add_parser("add")
+    radd.add_argument("signature")
+    radd.add_argument("argv_json", help="JSON array of argv, e.g. ['math','expr','sin(x)']")
+    radd.add_argument("--json", action="store_true")
+    def cmd_reg_add(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        memory = _memory()
+        # Validate JSON list
+        argv = _json.loads(args.argv_json)
+        rid = memory.add_regression(args.signature, _json.dumps(argv))
+        _print({"id": rid, "signature": args.signature}, args.json)
+    radd.set_defaults(func=cmd_reg_add)
+
+    rlist = reg_sub.add_parser("list")
+    rlist.add_argument("--signature")
+    rlist.add_argument("--json", action="store_true")
+    def cmd_reg_list(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        rows = memory.list_regressions(args.signature)
+        _print({
+            "regressions": [
+                {"id": r[0], "signature": r[1], "argv": r[2], "status": r[3], "pass": r[4], "fail": r[5], "updated_at": r[6]}
+                for r in rows
+            ]
+        }, args.json)
+    rlist.set_defaults(func=cmd_reg_list)
+
+    rrun = reg_sub.add_parser("run")
+    rrun.add_argument("--signature")
+    rrun.add_argument("--json", action="store_true")
+    def cmd_reg_run(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import json as _json
+        import subprocess, sys
+        memory = _memory()
+        rows = memory.list_regressions(args.signature)
+        results = []
+        for r in rows:
+            rid, sig, argv_json = r[0], r[1], r[2]
+            argv = _json.loads(argv_json)
+            try:
+                cp = subprocess.run([sys.executable, "-m", "gpt5", *argv], capture_output=True, text=True)
+                passed = cp.returncode == 0
+                log = (cp.stdout or "")[-500:] + (cp.stderr or "")[-500:]
+                memory.update_regression_result(rid, passed, log)
+                results.append({"id": rid, "signature": sig, "passed": passed})
+            except Exception as exc:  # noqa: BLE001
+                memory.update_regression_result(rid, False, str(exc))
+                results.append({"id": rid, "signature": sig, "passed": False, "error": str(exc)})
+        _print({"results": results}, args.json)
+    rrun.set_defaults(func=cmd_reg_run)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return
+    # Load plugins eagerly
+    pdir = Path(__file__).resolve().parent.parent / "plugins"
+    plugin_modules = [load_plugin(p) for p in discover_plugins(pdir)]
+
+    # Always-on deficiency detector wrapper
+    detector = DeficiencyDetector(memory=_memory())
+    try:
+        # Before-command plugin hooks
+        before_command_all(plugin_modules, args)
+        ret = args.func(args)
+        # After-command plugin hooks
+        after_command_all(plugin_modules, args, ret)
+    except Exception as exc:  # noqa: BLE001
+        info = detector.on_exception(where=f"cli:{getattr(args, 'command', 'unknown')}", args=vars(args), exc=exc)
+        # Emit a concise error for both JSON/non-JSON modes
+        is_json = bool(getattr(args, "json", False))
+        payload = {"error": str(exc), "deficiency": info}
+        if is_json:
+            _print(payload, True)
+        else:
+            print(f"Error: {payload}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
+
+

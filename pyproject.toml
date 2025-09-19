@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpt5-local-jarvis"
+version = "0.1.0"
+description = "Local Jarvis-style orchestration: planning, PRD, process, memory, swarm, web tool"
+authors = [{name = "Local User"}]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "sympy>=1.12",
+  "matplotlib>=3.8"
+]
+
+[project.scripts]
+gpt5 = "gpt5.cli.cli:main"
+
+[tool.setuptools]
+packages = ["gpt5", "gpt5.core", "gpt5.modules", "gpt5.tools", "gpt5.cli", "gpt5.math"]
+include-package-data = true
