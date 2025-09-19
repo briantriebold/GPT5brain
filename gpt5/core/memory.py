@@ -104,9 +104,28 @@ class MemoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(MEMORY_SCHEMA)
+            # Migrations: add new columns if missing
+            self._ensure_task_columns(conn)
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _ensure_task_columns(self, conn: sqlite3.Connection) -> None:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}  # type: ignore[index]
+        adds = []
+        if "started_at" not in cols:
+            adds.append("ALTER TABLE tasks ADD COLUMN started_at TEXT")
+        if "finished_at" not in cols:
+            adds.append("ALTER TABLE tasks ADD COLUMN finished_at TEXT")
+        if "duration_ms" not in cols:
+            adds.append("ALTER TABLE tasks ADD COLUMN duration_ms INTEGER")
+        for sql in adds:
+            try:
+                conn.execute(sql)
+            except Exception:
+                pass
+        if adds:
+            conn.commit()
 
     def persist_task(self, task: Task) -> None:
         with self._connect() as conn:
@@ -114,8 +133,9 @@ class MemoryStore:
                 """
                 INSERT INTO tasks (
                     title, description, capabilities, tags, dependencies,
-                    assigned_agent, status, created_at, updated_at, result
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    assigned_agent, status, created_at, updated_at, result,
+                    started_at, finished_at, duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.title,
@@ -128,6 +148,9 @@ class MemoryStore:
                     task.created_at.isoformat(),
                     task.updated_at.isoformat(),
                     task.result or "",
+                    task.started_at.isoformat() if task.started_at else None,
+                    task.finished_at.isoformat() if task.finished_at else None,
+                    task.duration_ms,
                 ),
             )
             conn.commit()

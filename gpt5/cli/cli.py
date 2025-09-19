@@ -515,6 +515,37 @@ def build_parser() -> argparse.ArgumentParser:
         _print({"root": float(root)}, args.json)
     mr.set_defaults(func=cmd_math_root)
 
+    mpl = math_sub.add_parser("plot", help="Plot y=f(x) over a range; saves PNG/SVG")
+    mpl.add_argument("expr")
+    mpl.add_argument("var")
+    mpl.add_argument("a", type=float)
+    mpl.add_argument("b", type=float)
+    mpl.add_argument("--samples", type=int, default=200)
+    mpl.add_argument("--out", required=True, help="Output image path (.png/.svg)")
+    mpl.add_argument("--json", action="store_true")
+    def cmd_math_plot(args: argparse.Namespace) -> None:  # noqa: ANN001
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import sympy as sp
+        from sympy.parsing.sympy_parser import parse_expr as _parse
+        x = sp.Symbol(args.var)
+        e = _parse(args.expr, evaluate=True)
+        f = sp.lambdify(x, e, modules=["numpy"])
+        xs = np.linspace(args.a, args.b, args.samples)
+        ys = f(xs)
+        fig, ax = plt.subplots()
+        ax.plot(xs, ys)
+        ax.set_xlabel(args.var)
+        ax.set_ylabel("f(x)")
+        fig.tight_layout()
+        outp = Path(args.out).resolve()
+        fig.savefig(outp)
+        plt.close(fig)
+        _print({"saved": str(outp), "points": int(args.samples)}, args.json)
+    mpl.set_defaults(func=cmd_math_plot)
+
 
     plan = sub.add_parser("plan", help="Generate execution plan")
     plan.add_argument("objective")
@@ -596,6 +627,37 @@ def build_parser() -> argparse.ArgumentParser:
         n = memory.index_all_specs()
         _print({"indexed": n}, args.json)
     mindx.set_defaults(func=cmd_mem_reindex)
+
+    mexp = mem_sub.add_parser("export", help="Export all specs to a directory")
+    mexp.add_argument("--dir", default="exported-specs")
+    mexp.add_argument("--json", action="store_true")
+    def cmd_mem_export(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        outdir = Path(args.dir).resolve()
+        ensure_dir(outdir)
+        rows = memory.list_specs()
+        count = 0
+        for _id, name, _created in rows:  # noqa: N806
+            rec = memory.load_spec(name)
+            if not rec:
+                continue
+            _, spec_name, content, _meta = rec
+            fname = sanitize_filename(f"{spec_name}.md")
+            (outdir / fname).write_text(content, encoding="utf-8")
+            count += 1
+        _print({"exported": count, "dir": str(outdir)}, args.json)
+    mexp.set_defaults(func=cmd_mem_export)
+
+    mweb = mem_sub.add_parser("search-web", help="Search only web: cached content")
+    mweb.add_argument("query")
+    mweb.add_argument("--top", type=int, default=5)
+    mweb.add_argument("--json", action="store_true")
+    def cmd_mem_search_web(args: argparse.Namespace) -> None:  # noqa: ANN001
+        memory = _memory()
+        all_hits = memory.search_text(args.query, top_k=50)
+        filt = [(n, s) for (n, s) in all_hits if str(n).startswith("web:")][: args.top]
+        _print({"results": filt}, args.json)
+    mweb.set_defaults(func=cmd_mem_search_web)
 
     # Git ops
     git = sub.add_parser("git", help="Basic git operations")

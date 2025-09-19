@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from .agent import Agent
@@ -44,10 +46,16 @@ class Orchestrator:
         agent = self._select_agent(task)
         if not agent:
             raise RuntimeError(f"No agent available for task '{task.title}'")
-
+        task.mark_in_progress()
+        start = perf_counter()
         result = agent.execute(task, orchestrator=self)
+        end = perf_counter()
         task.result = result
         task.status = "completed"
+        if task.started_at is None:
+            task.started_at = datetime.utcnow()
+        task.finished_at = datetime.utcnow()
+        task.duration_ms = int((end - start) * 1000)
         self.task_log.append(task)
 
         if self.config.enable_hooks:
@@ -77,4 +85,3 @@ class Orchestrator:
             "tasks_completed": len(self.task_log),
             "agents_active": sum(1 for a in self.agents.values() if a.is_active),
         }
-
