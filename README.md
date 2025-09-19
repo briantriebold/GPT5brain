@@ -8,3 +8,8 @@ Quick start (PowerShell):
 - .\.venv\Scripts\python -m pip install -e .
 - .\.venv\Scripts\gpt5 --help
 
+
+## Reports & Snapshot Index
+- HTML reports auto-export to `reports/` when enabled in `gpt5.settings.json`.
+- Build/update index: `gpt5 report index --dir reports`
+- Open `reports/index.html` in your browser to navigate the latest reports.
