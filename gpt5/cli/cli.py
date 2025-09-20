@@ -30,6 +30,7 @@ from gpt5 import config as gpt5_config
 from gpt5.tools import gh_cli
 from gpt5.tools import snapshot as snapshot_tool
 from gpt5.tools import changelog as changelog_tool
+from gpt5.tools import verify as verify_tool
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.db"
 
@@ -791,6 +792,36 @@ def build_parser() -> argparse.ArgumentParser:
         md = changelog_tool.generate_changelog(outp)
         _print({"status": "saved", "path": str(outp), "length": len(md)}, args.json)
     rchg.set_defaults(func=cmd_report_changelog)
+
+    # Verify/simplify expressions (subset)
+    verify = sub.add_parser("verify", help="Verification tools")
+    vsub = verify.add_subparsers(dest="verify_cmd")
+
+    veq = vsub.add_parser("expr-equal", help="Check equivalence of two expressions")
+    veq.add_argument("a")
+    veq.add_argument("b")
+    veq.add_argument("--vars", help="Comma-separated variable names (optional)")
+    veq.add_argument("--samples", type=int, default=50)
+    veq.add_argument("--tol", type=float, default=1e-9)
+    veq.add_argument("--json", action="store_true")
+    def cmd_verify_eq(args: argparse.Namespace) -> None:  # noqa: ANN001
+        vars_list = [v.strip() for v in (args.vars or '').split(',') if v.strip()] or None
+        res = verify_tool.equivalent_exprs(args.a, args.b, var_names=vars_list, samples=args.samples, tol=args.tol)
+        _print({
+            "equivalent": res.equivalent,
+            "method": res.method,
+            "counterexample": res.counterexample,
+            "message": res.message,
+        }, args.json)
+    veq.set_defaults(func=cmd_verify_eq)
+
+    vsimp = vsub.add_parser("simplify", help="Simplify an expression")
+    vsimp.add_argument("expr")
+    vsimp.add_argument("--json", action="store_true")
+    def cmd_verify_simplify(args: argparse.Namespace) -> None:  # noqa: ANN001
+        s = verify_tool.simplify_expr(args.expr)
+        _print({"simplified": s}, args.json)
+    vsimp.set_defaults(func=cmd_verify_simplify)
 
     rindex = rep_sub.add_parser("index", help="Build reports/index.html")
     rindex.add_argument("--dir", default="reports")
