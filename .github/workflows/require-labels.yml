@@ -1,0 +1,20 @@
+name: Require PR Labels
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, labeled, unlabeled]
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = (context.payload.pull_request.labels || []).map(l => l.name);
+            const ok = labels.some(l => ['nightly','feature','bug','chore','optimize','enhancement'].includes(l));
+            if (!ok) {
+              core.setFailed('PR must have at least one of: nightly, feature, bug, chore, optimize, enhancement');
+            }

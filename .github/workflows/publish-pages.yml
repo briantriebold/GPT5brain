@@ -37,6 +37,30 @@ jobs:
       - name: Build reports index
         run: |
           python -m gpt5 report index --dir reports --json
+      - name: Generate highlights
+        run: |
+          python - << 'PY'
+          import os
+          p='CHANGELOG.md'
+          latest=''
+          if os.path.exists(p):
+              with open(p,'r',encoding='utf-8') as f:
+                  lines=f.readlines()[:80]
+              latest=''.join(lines)
+          else:
+              latest='No changelog yet.'
+          html=f"""
+          <!doctype html><html><head><meta charset='utf-8'><title>Highlights</title>
+          <style>body{{font-family:Segoe UI,Roboto,Arial; margin:1.5rem}} pre{{white-space:pre-wrap}}</style></head><body>
+          <h1>Latest Highlights</h1>
+          <pre>{latest}</pre>
+          <p><a href='../reports/index.html'>Reports Index</a></p>
+          </body></html>
+          """
+          os.makedirs('site/reports', exist_ok=True)
+          with open('site/reports/highlights.html','w',encoding='utf-8') as f:
+              f.write(html)
+          PY
       - name: Upload artifact\n        uses: actions/upload-pages-artifact@v3\n        with:\n          path: 'site'
   deploy:
     environment:
@@ -57,3 +81,4 @@ jobs:
           python -m gpt5 report index --dir reports --json
           mkdir -p site/reports
           cp -r reports/* site/reports/
+          if [ -f CHANGELOG.md ]; then cp CHANGELOG.md site/; fi

@@ -15,3 +15,8 @@ Quick start (PowerShell):
 ## Live Reports (GitHub Pages)
 - Pages site: https://briantriebold.github.io/GPT5brain/
 - The `publish-pages` workflow publishes the `reports/` folder on pushes to `main`.
+
+## Changelog
+- Generated automatically on pushes to `main`.
+- View `CHANGELOG.md` in the repository root.
+- Latest highlights also published to the Pages site under `/reports/highlights.html`.
