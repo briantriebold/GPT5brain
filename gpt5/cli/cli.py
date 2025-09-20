@@ -27,6 +27,9 @@ from gpt5.tools import validators as validators
 from gpt5.tools import report_html as report_html
 from gpt5.tools.pathutil import sanitize_filename, ensure_dir
 from gpt5 import config as gpt5_config
+from gpt5.tools import gh_cli
+from gpt5.tools import snapshot as snapshot_tool
+from gpt5.tools import changelog as changelog_tool
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.db"
 
@@ -779,6 +782,15 @@ def build_parser() -> argparse.ArgumentParser:
         outp.write_text(html_text, encoding="utf-8")
         _print({"status": "saved", "path": str(outp)}, args.json)
     rhtml.set_defaults(func=cmd_report_html)
+
+    rchg = rep_sub.add_parser("changelog", help="Generate CHANGELOG.md from git history")
+    rchg.add_argument("--output", default="CHANGELOG.md")
+    rchg.add_argument("--json", action="store_true")
+    def cmd_report_changelog(args: argparse.Namespace) -> None:  # noqa: ANN001
+        outp = Path(args.output).resolve()
+        md = changelog_tool.generate_changelog(outp)
+        _print({"status": "saved", "path": str(outp), "length": len(md)}, args.json)
+    rchg.set_defaults(func=cmd_report_changelog)
 
     rindex = rep_sub.add_parser("index", help="Build reports/index.html")
     rindex.add_argument("--dir", default="reports")

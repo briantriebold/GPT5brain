@@ -1,4 +1,4 @@
-name: Publish Reports to GitHub Pages
+﻿name: Publish Reports to GitHub Pages
 
 on:
   push:
@@ -37,10 +37,7 @@ jobs:
       - name: Build reports index
         run: |
           python -m gpt5 report index --dir reports --json
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: 'reports'
+      - name: Upload artifact\n        uses: actions/upload-pages-artifact@v3\n        with:\n          path: 'site'
   deploy:
     environment:
       name: github-pages
@@ -51,3 +48,12 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          cp -r docs/* site/ 2>/dev/null || true
+          python -m gpt5 report index --dir reports --json
+          mkdir -p site/reports
+          cp -r reports/* site/reports/
