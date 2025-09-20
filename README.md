@@ -3,6 +3,9 @@
 Local, modular orchestration for planning, PRD generation, process mapping,
 checklists, swarm execution, evergreen memory, and a simple web fetcher.
 
+![Nightly Optimize](https://github.com/briantriebold/GPT5brain/actions/workflows/nightly-optimize.yml/badge.svg)
+![Pages](https://github.com/briantriebold/GPT5brain/actions/workflows/publish-pages.yml/badge.svg)
+
 Quick start (PowerShell):
 - python -m venv .venv
 - .\.venv\Scripts\python -m pip install -e .
@@ -10,6 +13,5 @@ Quick start (PowerShell):
 
 
 ## Live Reports (GitHub Pages)
-- A workflow publishes `reports/` to GitHub Pages on pushes to `main`.
-- Once the first deployment completes, browse: https://briantriebold.github.io/GPT5brain/
-- Index page: `reports/index.html` lists all exported reports.
+- Pages site: https://briantriebold.github.io/GPT5brain/
+- The `publish-pages` workflow publishes the `reports/` folder on pushes to `main`.

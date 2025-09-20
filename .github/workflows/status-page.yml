@@ -1,0 +1,73 @@
+name: Status Page
+
+on:
+  schedule:
+    - cron: '15 7 * * *' # daily after nightly
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build status page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          python - << 'PY'
+          import os, json, urllib.request
+          repo = os.environ['REPO']
+          token = os.environ['GH_TOKEN']
+          def gh_api(path):
+              req = urllib.request.Request(f'https://api.github.com{path}')
+              req.add_header('Authorization', f'token {token}')
+              req.add_header('Accept', 'application/vnd.github+json')
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read().decode('utf-8'))
+          prs = gh_api(f'/repos/{repo}/pulls?state=open')
+          lines = ['# Status', '', '## Open Pull Requests']
+          if not prs:
+              lines.append('- None')
+          for pr in prs:
+              lines.append(f"- [#{pr['number']}]({pr['html_url']}) {pr['title']} — {pr['head']['ref']} -> {pr['base']['ref']}")
+          md = '\n'.join(lines)
+          os.makedirs('docs', exist_ok=True)
+          with open('docs/status.md','w',encoding='utf-8') as f:
+              f.write(md)
+          html = f"""
+          <!doctype html><html><head><meta charset='utf-8'><title>Status</title>
+          <style>body{{font-family:Segoe UI,Roboto,Arial; margin:1.5rem}}</style></head><body>
+          <h1>Status</h1>
+          <h2>Open Pull Requests</h2>
+          <ul>
+          {''.join([f"<li><a href='{p['html_url']}'>#{p['number']} {p['title']}</a> — {p['head']['ref']} -&gt; {p['base']['ref']}</li>" for p in prs]) or '<li>None</li>'}
+          </ul>
+          <p><a href='../reports/index.html'>Reports Index</a></p>
+          </body></html>
+          """
+          os.makedirs('reports', exist_ok=True)
+          with open('reports/status.html','w',encoding='utf-8') as f:
+              f.write(html)
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/status.md reports/status.html || true
+          if git diff --cached --quiet; then
+            echo "No status changes"
+          else
+            git commit -m "chore(status): update status page"
+            git push
+          fi

@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an idea for GPT5brain
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this feature solve?
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe how you’d like it to work
+      placeholder: e.g., new CLI flags, reports, workflows, math ops
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+

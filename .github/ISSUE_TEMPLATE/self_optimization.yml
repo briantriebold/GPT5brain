@@ -1,0 +1,19 @@
+name: Self-Optimization Checklist
+description: Track an optimization run tasks and outcomes
+labels: [optimize]
+body:
+  - type: checkboxes
+    id: tasks
+    attributes:
+      label: Tasks
+      options:
+        - label: Run `optimize now` mission and commit reports
+        - label: Rebuild snapshot index and verify Pages
+        - label: Review deficiency dashboard and apply countermeasures
+        - label: Run regressions and confirm all pass
+        - label: Open/merge PRs for new changes
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / outcomes
+
