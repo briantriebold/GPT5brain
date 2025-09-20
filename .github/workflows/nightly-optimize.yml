@@ -1,0 +1,58 @@
+name: Nightly Optimize
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 07:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run optimize and build index
+        run: |
+          python -m gpt5 optimize now --objective "Nightly Optimize" --strategy pipeline --json
+          python -m gpt5 report index --dir reports --json
+
+      - name: Create nightly branch
+        id: branch
+        run: |
+          BR="nightly-$(date +%Y%m%d)"
+          echo "branch=$BR" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add reports gpt5/data/memory.db || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore(nightly): optimize + index"
+          fi
+          git push -u origin "$BR"
+
+      - name: Create PR and comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BR="${{ steps.branch.outputs.branch }}"
+          gh pr create -B main -H "$BR" -l nightly -t "Nightly Optimize: $(date -u +%Y-%m-%d)" -b "Automated optimize run and report index update."
+          gh pr comment "$BR" -b "Nightly optimize completed. See [reports index](https://briantriebold.github.io/GPT5brain/) and [status](https://briantriebold.github.io/GPT5brain/status.html)."
+          gh pr merge "$BR" --squash --auto || true
