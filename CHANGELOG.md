@@ -3,6 +3,7 @@
 ## 2025-09-20
 
 ### Features
+- feat(verify): expr equivalence + simplify tooling; integrates sympy + random testing
 - feat: snapshot index; gh CLI PR/issue support; optimize schedule; inline html options
 - feat: PR automation via GitHub API; sequence diagrams; parallel broadcast; report index polish
 - feat: real task timing + DB migration; memory export & web search; math plot; more math ops
@@ -11,6 +12,7 @@
 - feat: math fft; report html latest; execute diagrams; mission diagram + strategy; config + auto-export
 
 ### Docs
+- docs(changelog): update CHANGELOG.md
 - docs: add landing page; report changelog command; publish Pages from site (docs + reports)
 
 ### CI
