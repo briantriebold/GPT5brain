@@ -14,16 +14,10 @@
   </head>
   <body>
     <h1>mission:2:execution</h1>
-    <h2>Markdown</h2>
-    <pre># Mission Report — Self-Optimization Upgrades
+    <h2>Markdown (raw)</h2>
+    <pre># Optimize Report — Nightly Optimize
 
 Strategy: pipeline
-
-## Agent Allocation
-- planner: 3 tasks
-- designer: 2 tasks
-- builder: 1 tasks
-- qa: 0 tasks
 
 ## Tasks
 # Task Report
@@ -51,9 +45,27 @@ flowchart TD
     T3 --&gt; T4
     T5([Validate and iterate]):::task
     T4 --&gt; T5
-    classDef task fill:#e0f7fa,stroke:#006064,stroke-width:1px;
+    classDef task fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px;
+```
+
+## Agent Sequence
+```mermaid
+sequenceDiagram
+    participant O as orchestrator
+    O-&gt;&gt;+agent: Gather requirements
+    agent--&gt;&gt;-O: done (0 ms)
+    O-&gt;&gt;+agent: Identify constraints
+    agent--&gt;&gt;-O: done (0 ms)
+    O-&gt;&gt;+agent: Draft architecture
+    agent--&gt;&gt;-O: done (0 ms)
+    O-&gt;&gt;+agent: Define workflows
+    agent--&gt;&gt;-O: done (0 ms)
+    O-&gt;&gt;+agent: Implement modules
+    agent--&gt;&gt;-O: done (0 ms)
+    O-&gt;&gt;+agent: Validate and iterate
+    agent--&gt;&gt;-O: done (0 ms)
 ```</pre>
-    <h2>Diagrams</h2>
+    <h2>Mermaid Diagrams</h2>
     <div class="mermaid">
 flowchart TD
     T0([Gather requirements]):::task
@@ -67,7 +79,23 @@ flowchart TD
     T3 --> T4
     T5([Validate and iterate]):::task
     T4 --> T5
-    classDef task fill:#e0f7fa,stroke:#006064,stroke-width:1px;
+    classDef task fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px;
+</div>
+<div class="mermaid">
+sequenceDiagram
+    participant O as orchestrator
+    O->>+agent: Gather requirements
+    agent-->>-O: done (0 ms)
+    O->>+agent: Identify constraints
+    agent-->>-O: done (0 ms)
+    O->>+agent: Draft architecture
+    agent-->>-O: done (0 ms)
+    O->>+agent: Define workflows
+    agent-->>-O: done (0 ms)
+    O->>+agent: Implement modules
+    agent-->>-O: done (0 ms)
+    O->>+agent: Validate and iterate
+    agent-->>-O: done (0 ms)
 </div>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>mermaid.initialize({ startOnLoad: true });</script>
